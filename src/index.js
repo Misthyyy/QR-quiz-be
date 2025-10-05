@@ -6,7 +6,23 @@ import { loadPools } from "./sheets.js";
 
 const app = express();
 app.use(express.json());
-app.use(cors({ origin: process.env.CORS_ORIGIN?.split(",") || "*" }));
+
+// ✅ CORS setup cho FE
+const allowedOrigins = (process.env.CORS_ORIGIN || "").split(",");
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // cho phép requests từ FE hoặc server-side (origin null)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+  })
+);
 
 await initSchema();
 
