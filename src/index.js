@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { pool, initSchema } from "./db.js";
-import { loadPools } from "./sheets.js";
+import { loadDonorPhones, loadPools } from "./sheets.js";
 
 async function main() {
   // ✅ Tạo bảng nếu chưa có
@@ -59,7 +59,7 @@ async function main() {
 
   // 🟢 START GAME
   app.post("/api/start", async (req, res) => {
-    const { deviceId, checkedIn } = req.body || {};
+    const { deviceId, link } = req.body || {};
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
     const ip = getIP(req);
@@ -69,22 +69,35 @@ async function main() {
       "SELECT * FROM sessions WHERE device_id=$1",
       [deviceId]
     );
+
     if (existing.rows.length) {
       const row = existing.rows[0];
+
+      // Nếu đã finish, trả kết quả
       if (row.finished_at) {
         return res.json({
           alreadyPlayed: true,
           result: { score: row.score, reward: row.reward },
         });
       }
+
+      // Nếu chưa finish, update check-in nếu có link mới
+      if (link) {
+        await pool.query(
+          `UPDATE sessions SET checkin_link=$1, checked_in=$2 WHERE device_id=$3`,
+          [link, true, deviceId]
+        );
+      }
+
       return res.json({ ok: true, endTime: row.end_time });
     }
 
+    // Nếu chưa có session, insert mới
     const endTime = new Date(Date.now() + 60_000);
     await pool.query(
-      `INSERT INTO sessions(device_id, ip, ua, end_time, checked_in)
-       VALUES($1,$2,$3,$4,$5)`,
-      [deviceId, ip, ua, endTime, !!checkedIn]
+      `INSERT INTO sessions(device_id, ip, ua, end_time, checked_in, checkin_link)
+     VALUES($1,$2,$3,$4,$5,$6)`,
+      [deviceId, ip, ua, endTime, !!link, link || null]
     );
 
     res.json({ ok: true, endTime });
@@ -123,7 +136,7 @@ async function main() {
   });
 
   app.post("/api/finish", async (req, res) => {
-    const { deviceId, score } = req.body || {};
+    const { deviceId, score, link } = req.body || {};
     if (!deviceId || typeof score !== "number")
       return res.status(400).json({ error: "deviceId & score required" });
 
@@ -137,12 +150,22 @@ async function main() {
       return res.json({ score: row.score, reward: row.reward });
     }
 
-    const reward = row.checked_in ? "GIFT_LARGE" : rewardFromScore(score);
+    // Nếu frontend gửi link mới, update luôn
+    let checkedIn = row.checked_in;
+    let checkinLink = row.checkin_link;
+    if (link) {
+      checkedIn = true;
+      checkinLink = link;
+    }
+
+    const reward = checkedIn ? "GIFT_LARGE" : rewardFromScore(score);
     const finishedAt = new Date();
 
     await pool.query(
-      "UPDATE sessions SET score=$2, reward=$3, finished_at=$4 WHERE device_id=$1",
-      [deviceId, score, reward, finishedAt]
+      `UPDATE sessions 
+       SET score=$2, reward=$3, finished_at=$4, checked_in=$5, checkin_link=$6
+     WHERE device_id=$1`,
+      [deviceId, score, reward, finishedAt, checkedIn, checkinLink]
     );
 
     res.json({ score, reward });
@@ -157,6 +180,17 @@ async function main() {
     );
     if (!r.rows.length) return res.json(null);
     res.json(r.rows[0]);
+  });
+
+  // 🟢 GET DONOR PHONES
+  app.get("/api/donors", async (req, res) => {
+    try {
+      const donors = await loadDonorPhones();
+      res.json(donors.map((d) => d.phone));
+    } catch (err) {
+      console.error("Error loading donors:", err);
+      res.status(500).json({ error: "Failed to load donor phones" });
+    }
   });
 
   const port = process.env.PORT || 5000;
