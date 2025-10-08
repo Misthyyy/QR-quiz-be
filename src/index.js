@@ -175,7 +175,7 @@ async function main() {
   app.get("/api/result/:deviceId", async (req, res) => {
     const { deviceId } = req.params;
     const r = await pool.query(
-      "SELECT score, reward FROM sessions WHERE device_id=$1",
+      "SELECT score, reward, received_at FROM sessions WHERE device_id=$1",
       [deviceId]
     );
     if (!r.rows.length) return res.json(null);
@@ -190,6 +190,37 @@ async function main() {
     } catch (err) {
       console.error("Error loading donors:", err);
       res.status(500).json({ error: "Failed to load donor phones" });
+    }
+  });
+
+  // 🟢 MARK GIFT AS RECEIVED
+  app.post("/api/receive/:deviceId", async (req, res) => {
+    const { deviceId } = req.params;
+    if (!deviceId) return res.status(400).json({ error: "deviceId required" });
+
+    try {
+      // Kiểm tra xem session có tồn tại không
+      const sess = await pool.query(
+        "SELECT * FROM sessions WHERE device_id=$1",
+        [deviceId]
+      );
+
+      if (!sess.rows.length) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+
+      // Cập nhật trạng thái đã nhận quà (có thể thêm cột nếu chưa có)
+      await pool.query(
+        `UPDATE sessions 
+         SET received_at = NOW() 
+         WHERE device_id = $1`,
+        [deviceId]
+      );
+
+      res.json({ success: true, message: "Gift marked as received" });
+    } catch (err) {
+      console.error("Error marking gift received:", err);
+      res.status(500).json({ error: "Failed to mark gift received" });
     }
   });
 
